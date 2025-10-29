@@ -1,0 +1,5 @@
+Model;Feature_Type;n_components;Condition;F1 (mean ± std);BC_Only (mean ± std);RGC_Only (mean ± std);BC_and_RGC (mean ± std)
+SVM;DWT;10;No Reduction;0,782 ± 0,045;0,815 ± 0,082;0,612 ± 0,111;0,922 ± 0,056
+SVM;DWT;50;No Reduction;0,782 ± 0,045;0,815 ± 0,082;0,612 ± 0,111;0,922 ± 0,056
+SVM;Raw;10;No Reduction;0,693 ± 0,051;0,74 ± 0,096;0,528 ± 0,095;0,81 ± 0,049
+SVM;Raw;50;No Reduction;0,693 ± 0,051;0,74 ± 0,096;0,528 ± 0,095;0,81 ± 0,049

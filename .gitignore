@@ -3,3 +3,11 @@ __pycache__/
 .DS_Store
 
 Labelled_VEP_Data/
+
+Preprocessed_VEP_Data/
+
+old_code/
+
+classifier_exploration.ipynb
+
+2D_CNN.ipynb

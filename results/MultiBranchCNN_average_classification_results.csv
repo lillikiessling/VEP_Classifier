@@ -1,0 +1,2 @@
+Model;F1 (mean ± std);BC_Only (mean ± std);RGC_Only (mean ± std);BC_and_RGC (mean ± std)
+MultiBranchCNN;0,698 ± 0,0;0,55 ± 0,0;0,95 ± 0,0;0,6 ± 0,0
