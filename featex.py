@@ -2,6 +2,7 @@ import pywt
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
+from helpers import parse_filename
 
 class FeatureExtractor:
     """
@@ -38,9 +39,40 @@ class FeatureExtractor:
         
         features = np.stack(padded, axis=0)  # (n_channels, time_length)
         return features
-
+    
     @staticmethod
     def extract_wpd_features(signal, wavelet='db4', level=3, target_length=None):
+        """
+        Performs Wavelet Packet Decomposition and returns both the feature matrix
+        and the corresponding node paths (so you can track frequency order later).
+        """
+        wp = pywt.WaveletPacket(data=signal, wavelet=wavelet, mode='symmetric', maxlevel=level)
+
+        # Keep the node objects in frequency order
+        nodes = wp.get_level(level, order='freq')
+
+        # Extract coefficients from each node
+        coeffs = [node.data for node in nodes]
+
+        # Pad or truncate to equal length
+        max_len = max(len(c) for c in coeffs) if target_length is None else target_length
+        padded = []
+        for c in coeffs:
+            c = np.asarray(c)
+            if len(c) < max_len:
+                c = np.pad(c, (0, max_len - len(c)), mode='constant')
+            else:
+                c = c[:max_len]
+            padded.append(c)
+
+        features = np.stack(padded, axis=0)  # shape: (n_subbands, time_length)
+        node_paths = [node.path for node in nodes]  # e.g. ['aaaa', 'aaad', ..., 'dddd']
+
+        return features, node_paths
+
+
+    @staticmethod
+    def extract_wpd_features_old(signal, wavelet='db4', level=3, target_length=None):
         wp = pywt.WaveletPacket(data=signal, wavelet=wavelet, mode='symmetric', maxlevel=level)
         nodes = [node.path for node in wp.get_level(level, order='freq')]
 
@@ -58,7 +90,8 @@ class FeatureExtractor:
             padded.append(c)
         
         features = np.stack(padded, axis=0)  # (n_channels, time_length)
-        return features
+        return features, [node.path for node in nodes]
+    
     
     @staticmethod
     def extract_cwt_features(signal, fs, wavelet='morl',

@@ -26,7 +26,7 @@ class DimensionalityReducer:
         n_comp = min(self.n_ica, X_train.shape[1] - 1)
         if n_comp < 1:
             return X_train, X_test
-        ica = FastICA(n_components=n_comp, random_state=self.random_state)
+        ica = FastICA(n_components=n_comp, random_state=self.random_state, max_iter=500)
         X_train_ica = ica.fit_transform(X_train)
         X_test_ica = ica.transform(X_test)
         return X_train_ica, X_test_ica

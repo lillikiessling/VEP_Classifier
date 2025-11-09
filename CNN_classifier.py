@@ -1,4 +1,5 @@
 from sklearn.model_selection import LeaveOneOut, StratifiedKFold
+import matplotlib.pyplot as plt
 from imblearn.over_sampling import RandomOverSampler
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import confusion_matrix
@@ -10,6 +11,7 @@ from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.utils import to_categorical
 from sklearn.utils.class_weight import compute_class_weight
 import numpy as np
+from tensorflow.keras import Input
 import pandas as pd
 from sklearn.metrics import (
     accuracy_score,
@@ -22,29 +24,58 @@ from sklearn.metrics import (
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
+from tensorflow.keras.optimizers.schedules import ExponentialDecay
+from tensorflow.keras import optimizers
+from tensorflow.keras import regularizers
+import shap
 
-    
-class AttentionLayer(layers.Layer):
-    """Additive attention over subband feature maps, returns both context and weights."""
+
+
+class TemporalAttention(layers.Layer):
+    """Attention over time dimension for each subband branch."""
     def __init__(self, return_attention=False, **kwargs):
-        super(AttentionLayer, self).__init__(**kwargs)
+        super(TemporalAttention, self).__init__(**kwargs)
         self.return_attention = return_attention
 
     def build(self, input_shape):
-        self.w = self.add_weight(shape=(input_shape[-1], 1),
-                                 initializer='glorot_uniform',
-                                 trainable=True)
-        super(AttentionLayer, self).build(input_shape)
+        self.w = self.add_weight(
+            shape=(input_shape[-1], 1),
+            initializer='glorot_uniform',
+            trainable=True
+        )
+        super(TemporalAttention, self).build(input_shape)
 
     def call(self, inputs):
-        # inputs: (batch, n_branches, feature_dim)
-        e = tf.nn.tanh(tf.tensordot(inputs, self.w, axes=[[2], [0]]))  # (batch, n_branches, 1)
+        # inputs: (batch, time_steps, features)
+        e = tf.nn.tanh(tf.tensordot(inputs, self.w, axes=[[2], [0]]))  # (batch, time_steps, 1)
         alpha = tf.nn.softmax(e, axis=1)  # attention weights
         context = tf.reduce_sum(alpha * inputs, axis=1)  # weighted sum
 
         if self.return_attention:
-            return context, alpha  # both
+            return context, alpha
         return context
+
+class AttentionLayer(layers.Layer): 
+    """Additive attention over subband feature maps, returns both context and weights.""" 
+    def __init__(self, return_attention=False, **kwargs): 
+        super(AttentionLayer, self).__init__(**kwargs) 
+        self.return_attention = return_attention 
+    
+    def build(self, input_shape): 
+        self.w = self.add_weight(shape=(input_shape[-1], 1), initializer='glorot_uniform', trainable=True) 
+        super(AttentionLayer, self).build(input_shape) 
+
+    def call(self, inputs): 
+        # inputs: (batch, n_branches, feature_dim) 
+        e = tf.nn.tanh(tf.tensordot(inputs, self.w, axes=[[2], [0]])) 
+        alpha = tf.nn.softmax(e, axis=1) # attention weights 
+        context = tf.reduce_sum(alpha * inputs, axis=1) # weighted sum 
+        if self.return_attention: 
+            return context, alpha # both return context
+        return context
+
+
 
 # ---------------------------------------------------------
 #  Multi-Branch CNN Model
@@ -61,38 +92,49 @@ class MultiBranchCNN:
         self.n_branches = n_branches
         self.n_classes = n_classes
         self.model = self._build_model(lr)
-
-    def _build_model(self, lr):
+    
+    def _build_model(self, lr=1e-4):
         # One input per subband
         inputs = []
         branches = []
 
+        lr_schedule = ExponentialDecay(initial_learning_rate=3e-4, decay_steps=10000, decay_rate=0.9, staircase=True )
+
         for i in range(self.n_branches):
             inp = layers.Input(shape=self.input_shape, name=f"subband_{i}")
-            #x = layers.Conv1D(32, 3, activation='relu', padding='same')(inp)
-            x = layers.Conv1D(16, 5, activation='relu', padding='same')(inp)
-            x = layers.BatchNormalization()(x)
-            x = layers.MaxPooling1D(2)(x)
-            #x = layers.Conv1D(64, 3, activation='relu', padding='same')(x)
-            x = layers.Conv1D(32, 3, activation='relu', padding='same')(x)
-            x = layers.GlobalAveragePooling1D()(x)
+            # #x = layers.Conv1D(16, 5, activation='relu', padding='same')(inp)
+            # x = Conv1D(8, 5, activation='relu', padding='same')(inp)
+            # x = layers.BatchNormalization()(x)
+            # x = layers.MaxPooling1D(2)(x)
+            # #x = layers.Conv1D(32, 3, activation='relu', padding='same')(x)
+            # x = layers.Conv1D(16, 5, activation='relu', padding='same')(x)
+            # x = layers.BatchNormalization()(x)
+            # x = TemporalAttention(return_attention=False, name=f"temporal_attention_{i}")(x)
+            # branches.append(x)
+            # inputs.append(inp)
+
+            x = Conv1D(16, kernel_size=5, activation='relu')(inp)
+            x = BatchNormalization()(x)
+            x = MaxPooling1D(pool_size=2)(x)
+            x = Conv1D(32, kernel_size=3, activation='relu')(x)
+            x = BatchNormalization()(x)
+            x = MaxPooling1D(pool_size=2)(x)
+            x = TemporalAttention(return_attention=False, name=f"temporal_attention_{i}")(x)
             branches.append(x)
             inputs.append(inp)
+    
 
         merged = layers.Lambda(lambda tensors: tf.stack(tensors, axis=1), name="merged_subbands")(branches)
-        # shape now = (batch, n_branches, feature_dim)
 
-        attention_layer = AttentionLayer(return_attention=False, name="attention_layer")
+        attention_layer = AttentionLayer(return_attention=False, name="subband_attention")
         attention_out = attention_layer(merged)
-
-
-        x = layers.Dense(128, activation='relu')(attention_out)
+        x = layers.Dense(16, activation='relu')(attention_out)
         x = layers.Dropout(0.3)(x)
         output = layers.Dense(self.n_classes, activation='softmax')(x)
 
         model = models.Model(inputs=inputs, outputs=output)
         model.compile(
-            optimizer=optimizers.Adam(lr),
+            optimizer=optimizers.Adam(learning_rate=1e-4),
             loss='sparse_categorical_crossentropy',
             metrics=['accuracy']
         )
@@ -112,6 +154,8 @@ class MultiBranchCNN:
         all_preds = np.zeros_like(y)
         all_true = np.zeros_like(y)
 
+        #early_stop = EarlyStopping(monitor='val_loss', patience=8, restore_best_weights=True)
+
         for train_idx, val_idx in skf.split(X, y):
             print(f"\n----- Fold {fold} -----")
             fold += 1
@@ -122,15 +166,16 @@ class MultiBranchCNN:
             y_train, y_val = y[train_idx], y[val_idx]
 
             # Build new model for each fold
-            self.model = self._build_model(lr=1e-3)
-
+            self.model = self._build_model(lr=1e-4)
+            
             hist = self.model.fit(
                 X_train,
                 y_train,
                 validation_data=(X_val, y_val),
                 epochs=epochs,
                 batch_size=batch_size,
-                verbose=verbose
+                verbose=verbose,
+                #callbacks=[early_stop]
             )
             histories.append(hist)
 
@@ -181,8 +226,6 @@ class MultiBranchCNN:
 #  1D CNN Classifier
 # ---------------------------------------------------------
 
-
-
 class CNN1D:
     def __init__(self, X, y, n_splits=10, random_state=42, model_type="cnn"):
         self.X = X
@@ -194,11 +237,11 @@ class CNN1D:
 
     # --- 1D CNN ---
     def build_cnn(self, input_shape, n_classes):
-        model = Sequential([
-            Conv1D(16, kernel_size=5, activation='relu', input_shape=input_shape),
+        model = Sequential([  
+            Conv1D(16, kernel_size=5, activation='relu', input_shape=input_shape, kernel_regularizer=regularizers.l2(1e-4)),
             BatchNormalization(),
             MaxPooling1D(pool_size=2),
-            Conv1D(32, kernel_size=3, activation='relu'),
+            Conv1D(32, kernel_size=3, activation='relu', kernel_regularizer=regularizers.l2(1e-4)),
             BatchNormalization(),
             MaxPooling1D(pool_size=2),
             Flatten(),
@@ -227,6 +270,7 @@ class CNN1D:
         else:
             X_data = np.array(self.X)
 
+    
         for fold, (train_idx, test_idx) in enumerate(self.cv.split(X_data, label_codes), 1):
             # Split train/test
             X_train, X_test = X_data[train_idx], X_data[test_idx]
@@ -245,21 +289,37 @@ class CNN1D:
             y_train_cat = to_categorical(y_train, num_classes=n_classes)
             y_test_cat = to_categorical(y_test, num_classes=n_classes)
 
-            # Train and predict
-            model.fit(
+            history = model.fit(
                 X_train, y_train_cat,
+                validation_data=(X_test, y_test_cat),
                 epochs=epochs,
                 batch_size=batch_size,
-                verbose=verbose,
-                #class_weight=class_weight_dict
+                verbose=0
             )
+
+            # Print accuracy progress
+            print(f"{'Epoch':>5} | {'Train Acc':>10} | {'Val Acc':>10}")
+            print("-" * 33)
+            for epoch in range(epochs):
+                train_acc = history.history['accuracy'][epoch]
+                val_acc = history.history['val_accuracy'][epoch]
+                print(f"{epoch+1:5d} | {train_acc:10.4f} | {val_acc:10.4f}")
+            print("-" * 33)
+            print(f"Final Training Acc: {history.history['accuracy'][-1]:.4f} | "
+                  f"Validation Acc: {history.history['val_accuracy'][-1]:.4f}")
+
+
             preds = model.predict(X_test)
             preds = np.argmax(preds, axis=1)
 
             y_pred.extend([label_decoder[i] for i in preds])
             y_true.extend([label_decoder[i] for i in y_test])
-            print(f"Fold {fold} done")
-        return np.array(y_true), np.array(y_pred)
+
+            # SHAP values
+            explainer = shap.DeepExplainer(model, X_train[:100])
+            shap_values = explainer.shap_values(X_test)
+        
+        return np.array(y_true), np.array(y_pred), shap_values
 
 
     def evaluate(self, y_true, y_pred):

@@ -5,6 +5,7 @@ import os
 import re 
 import pandas as pd
 from tqdm import tqdm
+import scipy.signal as sp
 
 
 BASE_DIR = "Preprocessed_VEP_Data"
@@ -12,39 +13,65 @@ DEVICES = ["PRIMA"]
 LABELS = ["BC_Only", "RGC_Only", "BC_and_RGC"]
 fs = 2000
 
-def parse_vep_filename(filename):
-    # Remove extension and path
-    base = os.path.basename(filename)
-    name = os.path.splitext(base)[0]
+def parse_filename(fname):
+    """
+    Handles patterns like:
+    PRIMA100_9_10ms_0.60mWmm2.csv
+    PRIMA100_7_1ms_1.53mWmm2_2.csv
+    Pattern: Device_animal_pulsewidth_irradiance(_rep).csv
+    """
+    base = os.path.basename(fname)
+    name = base[:-4] if base.lower().endswith(".csv") else base
+    parts = name.split("_")
 
-    # Pattern now allows underscores or dots in decimals
-    pattern = (
-        r"(?P<device>[A-Za-z]+\d+)"           # device name (e.g., PRIMA100)
-        r"(?:_(?P<trial>\d+))?"                # optional trial index
-        r"_+(?P<pulse>[\d_\.]+)ms"            # pulse duration (e.g., 3ms, 0_5ms, 0.5ms)
-        r"_+(?P<power>[\d_\.]+)mWmm2"         # irradiance (e.g., 0.3mWmm2, 2.22mWmm2)
-    )
+    # Remove trailing numeric repetition indicator (e.g. '_2')
+    if parts[-1].isdigit():
+        parts = parts[:-1]
 
-    match = re.search(pattern, name)
-    if not match:
-        raise ValueError(f"Filename '{filename}' does not match expected pattern.")
+    # Irradiance is now last
+    irr_token = parts[-1]
+    if not irr_token.endswith("mWmm2"):
+        return None, None
+    irr_str = irr_token.replace("mWmm2", "").replace("_", ".")
+    try:
+        irradiance = float(irr_str)
+    except ValueError:
+        return None, None
 
-    parsed = match.groupdict()
+    # Pulse width is last token ending with 'ms'
+    pulse_token = None
+    for tok in reversed(parts[:-1]):
+        if tok.endswith("ms"):
+            pulse_token = tok[:-2]
+            break
+    if pulse_token is None:
+        return None, None
 
-    # Clean up underscores in numeric values
-    def clean_num(s):
-        return float(s.replace("_", ".")) if s else None
+    pulse_str = pulse_token.replace("_", ".")
+    try:
+        pulse_ms = float(pulse_str)
+    except ValueError:
+        return None, None
 
-    return {
-        "device": parsed.get("device"),
-        "trial_number": int(parsed["trial"]) if parsed.get("trial") else None,
-        "pulse_width_ms": clean_num(parsed.get("pulse")),
-        "irradiance_mWmm2": clean_num(parsed.get("power")),
-        "filename": base,
-    }
+    return pulse_ms, irradiance
+
+def bandpass_filter(signal, fs=2000, lowcut=1, highcut=30, order=4): # currently not used 
+    """
+    Apply zero-phase Butterworth band-pass filter to 1D signal.
+    fs      : sampling rate [Hz]
+    lowcut  : low cutoff frequency [Hz]
+    highcut : high cutoff frequency [Hz]
+    order   : filter order
+    """
+    nyq = 0.5 * fs
+    low = lowcut / nyq
+    high = highcut / nyq
+    b, a = sp.butter(order, [low, high], btype='band')
+    filtered = sp.filtfilt(b, a, signal)
+    return filtered
 
 
-def preprocess_signal(time, signal, t_min, t_max, normalize=True):
+def preprocess_signal(time, signal, t_min, t_max, normalize=True, filter=True):
     """
     Trim signal to [t_min, t_max] ms and optionally z-normalize it.
     """
@@ -52,22 +79,56 @@ def preprocess_signal(time, signal, t_min, t_max, normalize=True):
     time_trimmed = time[mask]
     signal_trimmed = signal[mask]
 
-    # if normalize: 
-    #     # normalize the peak amplitude within the first 50 ms
-    #     peak_amplitude = np.max(np.abs(signal_trimmed[time_trimmed <= 50]))
-    #     signal_trimmed = signal_trimmed / peak_amplitude if peak_amplitude != 0 else signal_trimmed
+    # Apply bandpass filter
+    # if filter:
+    #     signal_trimmed = bandpass_filter(signal_trimmed, fs=fs, lowcut=0.5, highcut=20, order=4)
+
     # if normalize:
-    #     # min-max normalization to [0, 1]
-    #     s_min, s_max = np.min(signal_trimmed), np.max(signal_trimmed)
-    #     signal_trimmed = (signal_trimmed - s_min) / (s_max - s_min)
-    # z-score normalization
+    #     signal_trimmed = (signal_trimmed - np.mean(signal_trimmed)) / np.std(signal_trimmed)
+    #     #signal_trimmed = np.clip(signal_trimmed, -3, 3)  
+    
+    # peak to peak normalization
     if normalize:
-        signal_trimmed = (signal_trimmed - np.mean(signal_trimmed)) / np.std(signal_trimmed)
-        signal_trimmed = np.clip(signal_trimmed, -3, 3)  
+        peak_to_peak = np.max(signal_trimmed) - np.min(signal_trimmed)
+        signal_trimmed = signal_trimmed / peak_to_peak
+        #signal_trimmed = signal_trimmed / np.max(signal_trimmed)
     return time_trimmed, signal_trimmed
 
+def load_vep_csv(file_path, t_min=10, t_max=125, normalize=True):
+    """
+    Loads a VEP CSV file, skipping non-numeric header lines automatically.
+    Trims to [t_min, t_max] and optionally normalizes the signal.
+    """
+    with open(file_path, "r", encoding="utf-8") as f:
+        lines = f.readlines()
 
-def load_vep_csv(file_path, t_min=0, t_max=125, normalize=True):
+    # Keep only numeric rows (two comma-separated numbers)
+    numeric_lines = []
+    for line in lines:
+        parts = line.strip().split(",")
+        if len(parts) < 2:
+            continue
+        try:
+            float(parts[0]); float(parts[1])
+            numeric_lines.append(line)
+        except ValueError:
+            continue
+
+    if not numeric_lines:
+        raise ValueError(f"No numeric data found in {file_path}")
+
+    # Load numeric data only
+    data = np.loadtxt(numeric_lines, delimiter=",")
+    if data.ndim == 1:
+        data = data.reshape(-1, 2)
+
+    time = data[:, 0]
+    signal = data[:, 1]
+    time, signal = preprocess_signal(time, signal, t_min=t_min, t_max=t_max, normalize=normalize)
+    return time, signal
+
+
+def load_vep_csv_old(file_path, t_min=10, t_max=125, normalize=True):
     data = np.loadtxt(file_path, delimiter=",")
     time = data[:, 0]
     signal = data[:, 1]

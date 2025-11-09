@@ -11,3 +11,8 @@ old_code/
 classifier_exploration.ipynb
 
 2D_CNN.ipynb
+
+results/ 
+
+
+MultiBranchCNN_withattention.ipynb
