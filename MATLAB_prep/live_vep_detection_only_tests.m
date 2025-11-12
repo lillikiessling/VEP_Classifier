@@ -1,6 +1,5 @@
-function [output_msg, signal_noise_peak_to_peak, signal_peak_to_peak] = live_vep_detection_only_tests( ...
-    working_directory, file_name, signal_power, pulse_width, output_dir, output_file)
-
+function [output_msg, signal_noise_peak_to_peak, signal_peak_to_peak]= live_vep_detection_only_tests(working_directory, file_name, signal_power,pulse_width, output_dir, output_file)
+    
     % initialize output
     output_msg = "";
 
@@ -18,26 +17,6 @@ function [output_msg, signal_noise_peak_to_peak, signal_peak_to_peak] = live_vep
     
     % set full path for further processing
     latest_folder = fullfile(working_directory, latest_folder);
-    
-    %% find the latest test in the latest folder 
-    
-    % % get most recent file
-    % search_folder = false;
-    % exclude_pattern = "noise";
-    % [latest_test_name, ~] = get_most_recent_item(latest_folder, search_folder, exclude_pattern);
-    % 
-    % % get most recent test number from file name
-    % signal_test_number = regexp(latest_test_name, 'test(\d+)', 'tokens', 'once');
-    % signal_test_number = str2double(signal_test_number{1});
-    % 
-    % % print the test name that will be treated as the signal measurement
-    % msg = sprintf('Signal test is: test%d.csv\n', signal_test_number);
-    % output_msg = [output_msg, msg];
-
-    %% run peak-to-peak and detect whether the measured signal is above noise level
-    
-    % organize obtained tests into a list
-    %test_list = signal_test_number;
 
     number_of_tests = 1; %length(test_list);
     
@@ -50,7 +29,6 @@ function [output_msg, signal_noise_peak_to_peak, signal_peak_to_peak] = live_vep
         % generate full path
         test_file = fullfile(latest_folder,strcat(file_name, '.csv'));
         
-        disp(['Trying to read: ', test_file]);
         % read test data and store it 
         raw_data{i} = csvread(test_file, 3, 6);
         
@@ -67,17 +45,11 @@ function [output_msg, signal_noise_peak_to_peak, signal_peak_to_peak] = live_vep
     noise_window = 50;
     user_title = "";
     save_figures = false;
-    save_csv = true;
     acuity = 0;
+    save_data_to_csv = 1; 
     
     % calculate peak-to-peak normalized to noise level
-    [peak_to_peak_amplitudes, signal_noise_peak_to_peak_amplitude, ~] = ...
-    calculate_peak_to_peak_only_tests( ...
-        raw_data, laser_intensity, normalize_to_noise, y_min, y_max, ...
-        pk_to_pk_time_window, inner_max_window, noise_detect_time, noise_window, ...
-        user_title, save_figures, pulse_width, acuity, save_csv, output_dir, output_file);
-
-
+    [peak_to_peak_amplitudes, signal_noise_peak_to_peak_amplitude, ~] = calculate_peak_to_peak_only_tests(raw_data, laser_intensity, normalize_to_noise, y_min, y_max, pk_to_pk_time_window, inner_max_window, noise_detect_time, noise_window, user_title, save_figures, pulse_width, acuity, save_data_to_csv, output_dir, output_file);
     % extract signal peak-to-peak
     signal_peak_to_peak = peak_to_peak_amplitudes(1);
     signal_noise_peak_to_peak = signal_noise_peak_to_peak_amplitude;

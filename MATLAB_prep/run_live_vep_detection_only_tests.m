@@ -1,17 +1,13 @@
 close all; clc;
 
 % --- Base folder setup ---
-input_base = 'Labelled_VEP_Data/PRIMA';
-output_base = 'Preprocessed_VEP_Data/PRIMA';
+input_base = 'Labelled_VEP_Data/MP20';
+output_base = 'Preprocessed_VEP_Data/MP20';
 
 categories = {'BC_and_RGC', 'BC_Only', 'RGC_Only'};
 
 % --- Disable figure visibility (no GUI windows) ---
 set(0, 'DefaultFigureVisible', 'off');
-
-all_summary = table('Size', [0 7], ...
-    'VariableTypes', {'string', 'double', 'double', 'double', 'double', 'double', 'string'}, ...
-    'VariableNames', {'FileName', 'SNR_Signal', 'SNR_Noise', 'SignalPower_mWmm2', 'PulseWidth_ms', 'SNR_dB', 'Category'});
 
 for c = 1:length(categories)
     category = categories{c};
@@ -36,24 +32,7 @@ for c = 1:length(categories)
         [~, file_name, ~] = fileparts(files(i).name);
         filename_str = files(i).name;
 
-        % --- Parse pulse width and signal power from filename ---
-        % e.g. PRIMA100_1_10ms_1.39mWmm2.csv
-        pulse_width_match = regexp(filename_str, '_(\d+)ms', 'tokens', 'once');
-        signal_power_match = regexp(filename_str, '_(\d+\.?\d*)mWmm2', 'tokens', 'once');
-
-        if isempty(pulse_width_match)
-            warning('Could not parse pulse width from %s. Using default 10ms.', filename_str);
-            pulse_width = 10;
-        else
-            pulse_width = str2double(pulse_width_match{1});
-        end
-
-        if isempty(signal_power_match)
-            warning('Could not parse signal power from %s. Using default 1 mW/mm².', filename_str);
-            signal_power = 1;
-        else
-            signal_power = str2double(signal_power_match{1});
-        end
+       [pulse_width, signal_power] = extract_PulseWidth_SignalPower(filename_str); 
 
         % --- Process file ---
         try
@@ -77,13 +56,6 @@ for c = 1:length(categories)
     writetable(summary, summary_path);
     fprintf('Saved summary table: %s\n', summary_path);
 
-    % Append to master table
-    all_summary = [all_summary; summary];
 end
-
-combined_path = fullfile(output_base, 'SNR_summary_all_categories.csv');
-writetable(all_summary, combined_path);
-fprintf('\nAll categories processed and combined summary saved to:\n%s\n', combined_path);
-
 
 fprintf('\nAll categories processed and saved to %s\n', output_base);

@@ -1,9 +1,7 @@
 from sklearn.decomposition import PCA, KernelPCA
-from sklearn.discriminant_analysis import LinearDiscriminantAnalysis, QuadraticDiscriminantAnalysis
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.decomposition import FastICA
-import umap
-import numpy as np
-import matplotlib.pyplot as plt
+
 
 class DimensionalityReducer:
     def __init__(self, n_pca=6, n_lda=2, n_ica=6, random_state=42):
@@ -40,7 +38,6 @@ class DimensionalityReducer:
         X_train_kpca = kpca.fit_transform(X_train)
         X_test_kpca = kpca.transform(X_test)
         return X_train_kpca, X_test_kpca
-
 
     def lda(self, X_train, y_train, X_test):
         lda = LinearDiscriminantAnalysis(n_components=self.n_lda)

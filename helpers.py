@@ -1,11 +1,7 @@
 
 import numpy as np
-import matplotlib.pyplot as plt
 import os
-import re 
 import pandas as pd
-from tqdm import tqdm
-import scipy.signal as sp
 
 
 BASE_DIR = "Preprocessed_VEP_Data"
@@ -13,135 +9,72 @@ DEVICES = ["PRIMA"]
 LABELS = ["BC_Only", "RGC_Only", "BC_and_RGC"]
 fs = 2000
 
-def parse_filename(fname):
-    """
-    Handles patterns like:
-    PRIMA100_9_10ms_0.60mWmm2.csv
-    PRIMA100_7_1ms_1.53mWmm2_2.csv
-    Pattern: Device_animal_pulsewidth_irradiance(_rep).csv
-    """
-    base = os.path.basename(fname)
-    name = base[:-4] if base.lower().endswith(".csv") else base
-    parts = name.split("_")
 
-    # Remove trailing numeric repetition indicator (e.g. '_2')
-    if parts[-1].isdigit():
-        parts = parts[:-1]
+def process_file(filepath, delay=0, t_min=0, t_max=200, normalize=True):
+    # 1) Extract pulsewidth from summary file
+    # Get device and category from filepath Assuming structure: BASE_DIR / DEVICE / CATEGORY / filename.csv
+    parts = os.path.normpath(filepath).split(os.sep)
+    device = parts[-3]
+    category = parts[-2]
 
-    # Irradiance is now last
-    irr_token = parts[-1]
-    if not irr_token.endswith("mWmm2"):
-        return None, None
-    irr_str = irr_token.replace("mWmm2", "").replace("_", ".")
-    try:
-        irradiance = float(irr_str)
-    except ValueError:
-        return None, None
+    # Load summary file for this device & category
+    summary_path = os.path.join(BASE_DIR, device, category, f"SNR_summary_{category}.csv")
+    summary_df = pd.read_csv(summary_path)
 
-    # Pulse width is last token ending with 'ms'
-    pulse_token = None
-    for tok in reversed(parts[:-1]):
-        if tok.endswith("ms"):
-            pulse_token = tok[:-2]
-            break
-    if pulse_token is None:
-        return None, None
+    # Find matching file row in summary
+    summary_df["FileName"] = summary_df["FileName"].astype(str).str.strip()
+    file_name = os.path.splitext(os.path.basename(filepath))[0]
+    match = summary_df[summary_df["FileName"] == file_name]
+    if match.empty:
+        raise ValueError(f"No matching file found in summary for {file_name} ({device}/{category})")
+    # Extract pulse width
+    pulse_width = float(match["PulseWidth_ms"].iloc[0])
 
-    pulse_str = pulse_token.replace("_", ".")
-    try:
-        pulse_ms = float(pulse_str)
-    except ValueError:
-        return None, None
+    # 2) Load and process raw data
+    df = pd.read_csv(filepath, header=None, names=["time_ms", "ch3", "ch1"])
+    idx_after_pulse = df.index[df["time_ms"] > pulse_width][0]
 
-    return pulse_ms, irradiance
+    # Align ch1 and ch3 so that they are zero after pulse
+    df["ch1"] = df["ch1"] - df.loc[idx_after_pulse, "ch1"]
+    df["ch3"] = df["ch3"] - df.loc[idx_after_pulse, "ch3"]
+    df["ch3"] = df["ch3"].where(df["time_ms"] > pulse_width, 0)
+    df["time_ms"] = df["time_ms"] - pulse_width + delay
 
-def bandpass_filter(signal, fs=2000, lowcut=1, highcut=30, order=4): # currently not used 
-    """
-    Apply zero-phase Butterworth band-pass filter to 1D signal.
-    fs      : sampling rate [Hz]
-    lowcut  : low cutoff frequency [Hz]
-    highcut : high cutoff frequency [Hz]
-    order   : filter order
-    """
-    nyq = 0.5 * fs
-    low = lowcut / nyq
-    high = highcut / nyq
-    b, a = sp.butter(order, [low, high], btype='band')
-    filtered = sp.filtfilt(b, a, signal)
-    return filtered
+    # Trim to [t_min, t_max]
+    df_sliced = df[(df["time_ms"] >= t_min) & (df["time_ms"] <= t_max)].copy()
+    time = df_sliced["time_ms"].values
+    signal = df_sliced["ch3"].values
 
-
-def preprocess_signal(time, signal, t_min, t_max, normalize=True, filter=True):
-    """
-    Trim signal to [t_min, t_max] ms and optionally z-normalize it.
-    """
-    mask = (time >= t_min) & (time <= t_max)
-    time_trimmed = time[mask]
-    signal_trimmed = signal[mask]
-
-    # Apply bandpass filter
-    # if filter:
-    #     signal_trimmed = bandpass_filter(signal_trimmed, fs=fs, lowcut=0.5, highcut=20, order=4)
-
-    # if normalize:
-    #     signal_trimmed = (signal_trimmed - np.mean(signal_trimmed)) / np.std(signal_trimmed)
-    #     #signal_trimmed = np.clip(signal_trimmed, -3, 3)  
-    
-    # peak to peak normalization
+    # Normalize (zero mean, unit std)
     if normalize:
-        peak_to_peak = np.max(signal_trimmed) - np.min(signal_trimmed)
-        signal_trimmed = signal_trimmed / peak_to_peak
-        #signal_trimmed = signal_trimmed / np.max(signal_trimmed)
-    return time_trimmed, signal_trimmed
-
-def load_vep_csv(file_path, t_min=10, t_max=125, normalize=True):
-    """
-    Loads a VEP CSV file, skipping non-numeric header lines automatically.
-    Trims to [t_min, t_max] and optionally normalizes the signal.
-    """
-    with open(file_path, "r", encoding="utf-8") as f:
-        lines = f.readlines()
-
-    # Keep only numeric rows (two comma-separated numbers)
-    numeric_lines = []
-    for line in lines:
-        parts = line.strip().split(",")
-        if len(parts) < 2:
-            continue
-        try:
-            float(parts[0]); float(parts[1])
-            numeric_lines.append(line)
-        except ValueError:
-            continue
-
-    if not numeric_lines:
-        raise ValueError(f"No numeric data found in {file_path}")
-
-    # Load numeric data only
-    data = np.loadtxt(numeric_lines, delimiter=",")
-    if data.ndim == 1:
-        data = data.reshape(-1, 2)
-
-    time = data[:, 0]
-    signal = data[:, 1]
-    time, signal = preprocess_signal(time, signal, t_min=t_min, t_max=t_max, normalize=normalize)
+        signal = (signal - np.mean(signal)) / np.std(signal)
     return time, signal
 
 
-def load_vep_csv_old(file_path, t_min=10, t_max=125, normalize=True):
-    data = np.loadtxt(file_path, delimiter=",")
-    time = data[:, 0]
-    signal = data[:, 1]
-    time, signal = preprocess_signal(time, signal, t_min=t_min, t_max=t_max, normalize=normalize)
-    return time, signal
+def compute_average_signal(df_list, t_min=0, t_max=200):
+    """
+    Computes the average VEP signal (Ch1) from a list of PROCESSED DataFrames.
+    """
+    all_times, all_signals = [], []
+
+    for df in df_list: 
+        time, signal = process_file(df, t_min=t_min, t_max=t_max, normalize=True)
+        if len(signal) > 0:
+            all_times.append(time)
+            all_signals.append(signal)
+    
+    avg_t = all_times[0]  # all 'time' vectors are identical
+    
+    signals_matrix = np.stack(all_signals, axis=1) 
+    avg_sig = np.mean(signals_matrix, axis=1)
+    return avg_t, avg_sig
 
 
 
 def load_dataset_paths(base_dir=BASE_DIR, devices=DEVICES, labels=LABELS, ext=".csv"):
     """
     Returns a nested dictionary with all file paths per device and label.
-    Example:
-        paths["PRIMA"]["BC_Only"] -> list of CSV file paths
+    Example: paths["PRIMA"]["BC_Only"] list of CSV file paths
     """
     paths = {}
     for device in devices:
@@ -157,38 +90,27 @@ def load_dataset_paths(base_dir=BASE_DIR, devices=DEVICES, labels=LABELS, ext=".
             paths[device][label] = file_list
     return paths
 
-def compute_class_average_signal(file_list, t_min=0, t_max=125, normalize=True):
-    """Compute the average signal across *all* files in a given class."""
-    all_times, all_signals = [], []
 
-    for file in tqdm(file_list, desc="Computing class average", leave=False):
-        time, signal = load_vep_csv(file, t_min=t_min, t_max=t_max, normalize=normalize)
-        all_times.append(time)
-        all_signals.append(signal)
+def compute_average_signal(file_list, t_min=0, t_max=200, normalize=True, delay=0):
+    all_times = []
+    all_signals = []
 
-    # Find overlapping time region across all signals
-    common_t_min = max(t[0] for t in all_times)
-    common_t_max = min(t[-1] for t in all_times)
-    common_time = np.linspace(common_t_min, common_t_max, 1000)
+    for filepath in file_list:
+        time, signal = process_file(filepath, delay=delay, t_min=t_min, t_max=t_max, normalize=normalize)
+        if len(signal) > 0:
+            all_times.append(time)
+            all_signals.append(signal)
 
-    interpolated_signals = [
-        np.interp(common_time, t, s) for t, s in zip(all_times, all_signals)
-    ]
-
-    avg_signal = np.mean(interpolated_signals, axis=0)
-    return common_time, avg_signal
+    # Assumes all time vectors are identical
+    avg_time = all_times[0]
+    signals_matrix = np.stack(all_signals, axis=1)
+    avg_signal = np.mean(signals_matrix, axis=1)
+    return avg_time, avg_signal
 
 
+
+# TODO: Needs to be rewritten
 def summarize_results_and_save(average_results, model_name = "Model"):
-    """
-    Summarizes average classification results (single or multiple setups),
-    focusing only on F1 metrics, sorts by F1_mean descending,
-    and saves to CSV with EU-style formatting.
-
-    Automatically handles:
-      - average_results as dict of dicts (multiple feature types)
-      - average_results as a flat dict (single model)
-    """
     output_path= f"results/{model_name}_average_classification_results.csv"
     rows = []
     if isinstance(average_results, dict) and all(isinstance(v, dict) for v in average_results.values()):
