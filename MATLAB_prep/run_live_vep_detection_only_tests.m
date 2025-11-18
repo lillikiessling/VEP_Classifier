@@ -1,8 +1,8 @@
 close all; clc;
 
 % --- Base folder setup ---
-input_base = 'Labelled_VEP_Data/MP20';
-output_base = 'Preprocessed_VEP_Data/MP20';
+input_base = 'Labelled_VEP_Data/PRIMA';
+output_base = 'Preprocessed_VEP_Data/PRIMA';
 
 categories = {'BC_and_RGC', 'BC_Only', 'RGC_Only'};
 

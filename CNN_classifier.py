@@ -20,6 +20,8 @@ from tensorflow.keras.layers import (
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.utils import to_categorical
 import tensorflow as tf
+from tensorflow.keras.regularizers import l2
+from tensorflow.keras.layers import Activation
 
 
 # TODO: combine to one class since CNN architecture is the same!
@@ -155,7 +157,7 @@ class Multichannel_1DCNN:
         self.random_state = random_state
         self.n_classes = None
 
-    def build_cnn(self, n_points, n_levels):
+    def build_cnn_old(self, n_points, n_levels):
         model = Sequential([
             Input(shape=(n_points, n_levels)),
             Conv1D(filters=16, kernel_size=5, activation='relu', padding='same'),
@@ -173,6 +175,36 @@ class Multichannel_1DCNN:
             metrics=['accuracy']
         )
         return model
+    
+    def build_cnn(self, n_points, n_levels):
+        model = Sequential([
+            Input(shape=(n_points, n_levels)),
+
+            Conv1D(16, 5, padding='same', kernel_regularizer=l2(1e-4)),
+            BatchNormalization(),
+            Activation('relu'), 
+            MaxPooling1D(2),
+
+            Conv1D(32, 3, padding='same', kernel_regularizer=l2(1e-4)),
+            BatchNormalization(),
+            Activation('relu'),
+            MaxPooling1D(2),
+
+            Flatten(),
+            Dropout(0.5),
+
+            Dense(64, activation='relu', kernel_regularizer=l2(1e-4)),
+            Dropout(0.3),
+
+            Dense(self.n_classes, activation='softmax')
+        ])
+        model.compile(
+            optimizer=Adam(learning_rate=1e-3),
+            loss='categorical_crossentropy',
+            metrics=['accuracy']
+        )
+        return model
+
 
     # --- Training ---
     def fit_nfoldcv(self, X, y, n_splits=5, random_state=42, epochs=25, batch_size=8):
@@ -186,6 +218,7 @@ class Multichannel_1DCNN:
         label_decoder = dict(enumerate(label_enc.cat.categories))
 
         all_shap_values = []
+        all_test_indices = []
         for fold, (train_idx, test_idx) in enumerate(cv.split(X, label_codes), 1):
             print(f"\n--- Fold {fold}/{n_splits} ---")
             K.clear_session()
@@ -198,7 +231,7 @@ class Multichannel_1DCNN:
 
             early_stopping = tf.keras.callbacks.EarlyStopping(
                 monitor='val_loss',
-                patience=10,
+                patience=20,
                 restore_best_weights=True
             )
 
@@ -240,8 +273,9 @@ class Multichannel_1DCNN:
             # average over test samples in fold
             shap_values = np.mean(shap_values, axis=0)  # dimension (n_points, n_levels, n_classes)
             all_shap_values.append(shap_values)
-        return np.array(y_true), np.array(y_pred), all_shap_values
-
+            all_test_indices.extend(test_idx)
+        return np.array(y_true), np.array(y_pred), all_shap_values, all_test_indices
+    
 
     def fit_traintest(self, X_train, y_train, X_test, y_test, epochs=25, batch_size=8):
         self.n_classes = len(np.unique(y_train))

@@ -10,6 +10,17 @@ LABELS = ["BC_Only", "RGC_Only", "BC_and_RGC"]
 fs = 2000
 
 
+def load_preprocessed_signal(file):
+    df = pd.read_csv(file)
+
+    # No skiprows, no sub-header
+    df = df[['Time', 'Signal']]
+
+    signal = df['Signal'].values
+    time = df['Time'].values
+    return time, signal
+
+
 def process_file(filepath, delay=0, t_min=0, t_max=200, normalize=True):
     # 1) Extract pulsewidth from summary file
     # Get device and category from filepath Assuming structure: BASE_DIR / DEVICE / CATEGORY / filename.csv
