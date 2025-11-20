@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 from scipy.signal import butter, filtfilt, iirnotch
 from scipy.signal import detrend
 import os
+import shutil
 
 # get ch1 and ch3 data 
 BASE_DIR = "MATLAB_prep/Labelled_VEP_Data"
@@ -12,16 +13,29 @@ OUTPUT_DIR = "Preprocessed_VEP_Data"
 DEVICES = ["PRIMA", "MP20"]
 LABELS = ["BC_Only", "RGC_Only", "BC_and_RGC"]
 
-def preprocess_save_all(BASE_DIR=BASE_DIR, OUTPUT_DIR=OUTPUT_DIR, DEVICES=DEVICES, LABELS=LABELS, normalize=True, tmax=400, delay=0):
+def preprocess_save_all(BASE_DIR=BASE_DIR, OUTPUT_DIR=OUTPUT_DIR, 
+                        DEVICES=DEVICES, LABELS=LABELS, 
+                        normalize=True, tmax=400, delay=0, 
+                        SNR_threshold=1):
+
+    # --- Clean output directory first ---
+    if os.path.exists(OUTPUT_DIR):
+        shutil.rmtree(OUTPUT_DIR)     
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+    excluded_files = 0
     all_paths_raw = load_dataset_paths(base_dir=BASE_DIR, devices=DEVICES, labels=LABELS)
     for device, label_dict in all_paths_raw.items():
         for label, file_list in label_dict.items():
+            # recreate subdirectory structure
             output_subdir = os.path.join(OUTPUT_DIR, device, label)
             os.makedirs(output_subdir, exist_ok=True)
-            
             for file_path in file_list:
-                time_preprocessed, signal_preprocessed = preprocess_signal(file_path, tmax=tmax, delay=delay, normalize=normalize)
-                
+                time_preprocessed, signal_preprocessed, snr = preprocess_signal(file_path, tmax=tmax, delay=delay, normalize=normalize)
+                if snr < SNR_threshold: 
+                    excluded_files += 1
+                    continue
+
                 filename = os.path.basename(file_path)
                 output_path = os.path.join(output_subdir, filename)
                 
@@ -31,6 +45,9 @@ def preprocess_save_all(BASE_DIR=BASE_DIR, OUTPUT_DIR=OUTPUT_DIR, DEVICES=DEVICE
 
                 df = pd.DataFrame({'Time': time_preprocessed, 'Signal': signal_preprocessed})
                 df.to_csv(output_path, index=False)
+
+    print("Excluded files due to low SNR (<1):", excluded_files)
+
 
 
 
@@ -45,11 +62,13 @@ def preprocess_signal(file, normalize=True, tmax=400, delay=0):
         file,
         delay=delay,
     )
+    snr = compute_vep_snr(time_clean, ch3_clean)
     time_trimmed, ch3_trimmed = trim(ch3_clean, time_clean, t_min=0, t_max=tmax)
-
     if normalize:
-        ch3_normalized = normalize_signal(ch3_trimmed)
-    return time_trimmed, ch3_normalized
+        ch3 = normalize_signal(ch3_trimmed)
+    else:
+        ch3 = ch3_trimmed
+    return time_trimmed, ch3, snr
 
 
 def load_signal(file):
@@ -144,6 +163,9 @@ def artifact_removal(signal, time, filepath, delay=0):
     signal = signal - signal[idx_after_pulse]
     # 2) zero out stimulation period (time <= pulse_width)
     signal = np.where(time > pulse_width, signal, 0)
+    # or set to mean 
+    #mean_after_pulse = np.mean(signal[idx_after_pulse:])
+    #signal = np.where(time > pulse_width, signal, mean_after_pulse)
     # 3) shift so stimulus onset = 0 ms, add optional delay
     time = time - pulse_width + delay
     return time, signal
@@ -155,3 +177,23 @@ def trim(signal, time, t_min=0, t_max=200):
 def normalize_signal(signal):
     signal = (signal - np.mean(signal)) / np.std(signal)
     return signal
+
+def compute_vep_snr(time, signal, 
+                    baseline_window=(200,400),
+                    signal_window=(0, 50)):
+    """
+    Standard VEP SNR = RMS(signal window) / RMS(baseline window)
+    """
+    # mask baseline
+    b0, b1 = baseline_window
+    mask_baseline = (time >= b0) & (time <= b1)
+    baseline_rms = np.sqrt(np.mean(signal[mask_baseline]**2))
+
+    # mask signal
+    s0, s1 = signal_window
+    mask_signal = (time >= s0) & (time <= s1)
+    signal_rms = np.sqrt(np.mean(signal[mask_signal]**2))
+
+    # SNR linear + dB
+    snr = signal_rms / baseline_rms
+    return snr

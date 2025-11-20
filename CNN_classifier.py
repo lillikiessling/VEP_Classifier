@@ -157,7 +157,7 @@ class Multichannel_1DCNN:
         self.random_state = random_state
         self.n_classes = None
 
-    def build_cnn_old(self, n_points, n_levels):
+    def build_cnn(self, n_points, n_levels):
         model = Sequential([
             Input(shape=(n_points, n_levels)),
             Conv1D(filters=16, kernel_size=5, activation='relu', padding='same'),
@@ -176,36 +176,6 @@ class Multichannel_1DCNN:
         )
         return model
     
-    def build_cnn(self, n_points, n_levels):
-        model = Sequential([
-            Input(shape=(n_points, n_levels)),
-
-            Conv1D(16, 5, padding='same', kernel_regularizer=l2(1e-4)),
-            BatchNormalization(),
-            Activation('relu'), 
-            MaxPooling1D(2),
-
-            Conv1D(32, 3, padding='same', kernel_regularizer=l2(1e-4)),
-            BatchNormalization(),
-            Activation('relu'),
-            MaxPooling1D(2),
-
-            Flatten(),
-            Dropout(0.5),
-
-            Dense(64, activation='relu', kernel_regularizer=l2(1e-4)),
-            Dropout(0.3),
-
-            Dense(self.n_classes, activation='softmax')
-        ])
-        model.compile(
-            optimizer=Adam(learning_rate=1e-3),
-            loss='categorical_crossentropy',
-            metrics=['accuracy']
-        )
-        return model
-
-
     # --- Training ---
     def fit_nfoldcv(self, X, y, n_splits=5, random_state=42, epochs=25, batch_size=8):
         X = np.array(X)
