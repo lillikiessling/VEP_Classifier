@@ -12,10 +12,8 @@ fs = 2000
 
 def load_preprocessed_signal(file):
     df = pd.read_csv(file)
-
     # No skiprows, no sub-header
     df = df[['Time', 'Signal']]
-
     signal = df['Signal'].values
     time = df['Time'].values
     return time, signal

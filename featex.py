@@ -38,3 +38,9 @@ class FeatureExtractor:
         features = np.stack(padded, axis=0)  # (n_channels, time_length)
         return features
     
+    @staticmethod
+    def dwt_downsampling(signal, wavelet='db4', level=1):
+        coeffs = pywt.wavedec(signal, wavelet, level=level)
+        # Only keep the first element (approximation coefficients) at the specified level, which represents the lowest frequency content
+        downsampled_signal = np.asarray(coeffs[0])
+        return downsampled_signal

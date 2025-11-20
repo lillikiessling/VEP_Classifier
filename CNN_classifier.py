@@ -40,12 +40,11 @@ class CNN1D:
 
     # --- 1D CNN ---
     def build_cnn(self, input_shape, n_classes):
-        model = Sequential([  
-            Conv1D(16, kernel_size=5, activation='relu', input_shape=input_shape, kernel_regularizer=regularizers.l2(1e-4)),
-            BatchNormalization(),
+        model = Sequential([
+            Input(shape=input_shape),
+            Conv1D(filters=16, kernel_size=5, activation='relu', padding='same'),
             MaxPooling1D(pool_size=2),
-            Conv1D(32, kernel_size=3, activation='relu', kernel_regularizer=regularizers.l2(1e-4)),
-            BatchNormalization(),
+            Conv1D(filters=32, kernel_size=3, activation='relu', padding='same'),
             MaxPooling1D(pool_size=2),
             Flatten(),
             Dense(64, activation='relu'),
@@ -73,8 +72,9 @@ class CNN1D:
         else:
             X_data = np.array(self.X)
 
-    
         for fold, (train_idx, test_idx) in enumerate(self.cv.split(X_data, label_codes), 1):
+            K.clear_session()  
+
             # Split train/test
             X_train, X_test = X_data[train_idx], X_data[test_idx]
             y_train, y_test = label_codes[train_idx], label_codes[test_idx]
@@ -92,24 +92,28 @@ class CNN1D:
             y_train_cat = to_categorical(y_train, num_classes=n_classes)
             y_test_cat = to_categorical(y_test, num_classes=n_classes)
 
+            early_stopping = tf.keras.callbacks.EarlyStopping(
+            monitor='val_loss',
+            patience=20,
+            restore_best_weights=True
+            )
+
             history = model.fit(
                 X_train, y_train_cat,
                 validation_data=(X_test, y_test_cat),
                 epochs=epochs,
                 batch_size=batch_size,
-                verbose=0
+                verbose=0,
+                callbacks=[early_stopping]
             )
 
             # Print accuracy progress
-            print(f"{'Epoch':>5} | {'Train Acc':>10} | {'Val Acc':>10}")
-            print("-" * 33)
-            for epoch in range(epochs):
-                train_acc = history.history['accuracy'][epoch]
-                val_acc = history.history['val_accuracy'][epoch]
-                print(f"{epoch+1:5d} | {train_acc:10.4f} | {val_acc:10.4f}")
-            print("-" * 33)
-            print(f"Final Training Acc: {history.history['accuracy'][-1]:.4f} | "
-                  f"Validation Acc: {history.history['val_accuracy'][-1]:.4f}")
+            best_epoch = np.argmin(history.history['val_loss']) + 1
+            best_val_loss = history.history['val_loss'][best_epoch - 1]
+            best_val_acc = history.history['val_accuracy'][best_epoch - 1]
+            best_train_acc = history.history['accuracy'][best_epoch - 1]
+            print(f"[Fold {fold}] Early stopped at epoch {len(history.history['val_loss'])} "
+            f"→ best epoch = {best_epoch}, val_loss={best_val_loss:.4f}, val_acc={best_val_acc:.4f}, train_acc={best_train_acc:.4f}")
 
 
             preds = model.predict(X_test)
@@ -119,7 +123,7 @@ class CNN1D:
             y_true.extend([label_decoder[i] for i in y_test])
 
             # SHAP values
-            explainer = shap.DeepExplainer(model, X_train[:100])
+            explainer = shap.GradientExplainer(model, X_train[:100])
             shap_values = explainer.shap_values(X_test)
         
         return np.array(y_true), np.array(y_pred), shap_values
